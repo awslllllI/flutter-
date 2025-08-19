@@ -7,9 +7,10 @@ class FogOfWarPainter extends CustomPainter {
   final LatLng centerLatLng;
   final double zoom;
   final Size screenSize;
-  final double hexRadius; // 六边形基准半径
+  final double squareSize; // 正方形边长
   final double opacity; // 迷雾透明度
-  // 六边形网格锚点
+
+  // 正方形网格锚点
   static LatLng? _originLatLng;
 
   FogOfWarPainter({
@@ -17,7 +18,7 @@ class FogOfWarPainter extends CustomPainter {
     required this.centerLatLng,
     required this.zoom,
     required this.screenSize,
-    this.hexRadius = 25,
+    this.squareSize = 50,
     this.opacity = 0.9,
   }) {
     _originLatLng ??= centerLatLng;
@@ -51,12 +52,9 @@ class FogOfWarPainter extends CustomPainter {
     return _worldToScreen(_latLngToWorld(latLng));
   }
 
-  // 生成六边形顶点
-  List<Offset> _hexagonPoints(Offset center, double r) {
-    return List.generate(6, (i) {
-      double angleRad = math.pi / 180 * (60 * i);
-      return Offset(center.dx + r * math.cos(angleRad), center.dy + r * math.sin(angleRad));
-    });
+  // 判断点是否在多边形内
+  bool _isPointInPolygon(Offset point, Path polygonPath) {
+    return polygonPath.contains(point);
   }
 
   // 判断折线段是否与多边形相交
@@ -84,9 +82,8 @@ class FogOfWarPainter extends CustomPainter {
       ..color = Colors.black.withOpacity(opacity)
       ..style = PaintingStyle.fill;
 
-    final hexBaseRadius = hexRadius;
-    final currentHexRadius = hexBaseRadius * math.pow(2, zoom - 14);
-    final hexHeight = math.sqrt(3) * currentHexRadius;
+    // 根据缩放级别调整正方形边长
+    final currentSquareSize = squareSize * math.pow(2, zoom - 14);
 
     final originWorld = _latLngToWorld(_originLatLng!);
     final tracePointsScreen = tracePoints.map(_latLngToScreen).toList();
@@ -94,40 +91,46 @@ class FogOfWarPainter extends CustomPainter {
     // 计算屏幕对应的世界坐标范围（加缓冲区）
     final topLeftWorld = _screenToWorld(const Offset(0, 0));
     final bottomRightWorld = _screenToWorld(Offset(size.width, size.height));
-    final xMin = topLeftWorld.dx - 1.5 * currentHexRadius;
-    final xMax = bottomRightWorld.dx + 1.5 * currentHexRadius;
-    final yMin = topLeftWorld.dy - hexHeight;
-    final yMax = bottomRightWorld.dy + hexHeight;
+    final xMin = topLeftWorld.dx - currentSquareSize;
+    final xMax = bottomRightWorld.dx + currentSquareSize;
+    final yMin = topLeftWorld.dy - currentSquareSize;
+    final yMax = bottomRightWorld.dy + currentSquareSize;
 
-    // 遍历屏幕可见区域六边形
+    // 遍历屏幕可见区域正方形
     for (int col = -1000; col < 1000; col++) {
-      double worldX = originWorld.dx + col * 1.5 * currentHexRadius;
+      double worldX = originWorld.dx + col * currentSquareSize;
       if (worldX < xMin) continue;
       if (worldX > xMax) break;
 
       for (int row = -1000; row < 1000; row++) {
-        double worldY = originWorld.dy + row * hexHeight + (col % 2) * (hexHeight / 2);
+        double worldY = originWorld.dy + row * currentSquareSize;
         if (worldY < yMin) continue;
         if (worldY > yMax) break;
 
-        Offset screenCenter = _worldToScreen(Offset(worldX, worldY));
-        List<Offset> hexPoints = _hexagonPoints(screenCenter, currentHexRadius);
-        Path hexPath = Path()..addPolygon(hexPoints, true);
+        // 计算正方形左上角的屏幕坐标
+        final topLeftScreen = _worldToScreen(Offset(worldX, worldY));
+
+        // 定义正方形路径
+        final rect = Rect.fromLTWH(topLeftScreen.dx, topLeftScreen.dy, currentSquareSize, currentSquareSize);
+        final squarePath = Path()..addRect(rect);
+        final squarePoints = [rect.topLeft, rect.topRight, rect.bottomRight, rect.bottomLeft];
 
         bool shouldDraw = true;
 
         // 轨迹点擦除
-        if (tracePointsScreen.any((p) => hexPath.contains(p))) shouldDraw = false;
+        if (tracePointsScreen.any((p) => _isPointInPolygon(p, squarePath))) {
+          shouldDraw = false;
+        }
 
         // 轨迹折线擦除
         for (int i = 1; i < tracePointsScreen.length; i++) {
-          if (_lineIntersectsPolygon(tracePointsScreen[i - 1], tracePointsScreen[i], hexPoints)) {
+          if (_lineIntersectsPolygon(tracePointsScreen[i - 1], tracePointsScreen[i], squarePoints)) {
             shouldDraw = false;
             break;
           }
         }
 
-        if (shouldDraw) canvas.drawPath(hexPath, fogPaint);
+        if (shouldDraw) canvas.drawPath(squarePath, fogPaint);
       }
     }
   }
